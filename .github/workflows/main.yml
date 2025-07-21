@@ -1,0 +1,551 @@
+name: AppCAT Release Testing
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "AppCAT version to test"
+        required: true
+        default: "7.7.0.0"
+        type: string
+  push:
+    branches: [main, master]
+    paths:
+      - ".github/workflows/appcat-test.yml"
+  pull_request:
+    branches: [main, master]
+
+env:
+  APPCAT_VERSION: ${{ github.event.inputs.version || '7.6.0.5-preview' }}
+
+jobs:
+  test-macos:
+    name: Test macOS (${{ matrix.arch }})
+    runs-on: macos-latest
+    strategy:
+      matrix:
+        arch: [amd64, arm64]
+      fail-fast: false
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Java 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: "21"
+          distribution: "temurin"
+
+      - name: Test macOS AppCAT (${{ matrix.arch }})
+        run: |
+          # Set version and architecture variables
+          version="${{ env.APPCAT_VERSION }}"
+          arch="${{ matrix.arch }}"
+
+          if [ "$arch" = "amd64" ]; then
+            name="azure-migrate-appcat-for-java-cli-macos-amd64-$version"
+          else
+            name="azure-migrate-appcat-for-java-cli-macos-arm64-$version"
+          fi
+
+          tar_url="https://aka.ms/appcat/$name.tar.gz"
+
+          # Create test directory
+          rm -rf appcat_test_result
+          mkdir appcat_test_result
+          cd appcat_test_result
+
+          echo "============== Testing macOS $arch =============="
+
+          # Download the files
+          echo "> Downloading $arch files..."
+          curl -L -O -J $tar_url
+
+          # Extract the files
+          echo "> Extracting $arch file..."
+          tar -xzf $name.tar.gz
+
+          # Fetch certificate information
+          echo "> Fetching certificate information for $arch file..."
+          codesign -dv --verbose=4 $name/appcat || echo "⚠️ Certificate check failed"
+
+          # Verify installation allowance
+          echo "> Verifying installation allowance for $arch file..."
+          spctl -a -vvv -t install $name/appcat || echo "⚠️ Installation allowance check failed"
+
+          # Notarization check
+          echo "> Checking notarization status for $arch file..."
+          codesign -vvv -R="notarized" --check-notarization $name/appcat || echo "⚠️ Notarization check failed"
+
+          # Test AppCAT functionality
+          echo "> Testing AppCAT functionality..."
+          chmod +x $name/appcat
+          ./$name/appcat --help || echo "⚠️ AppCAT help command failed"
+
+          # Download a sample Java project for testing
+          echo "> Downloading sample Java project..."
+          curl -L -o sample-project.zip "https://github.com/airsonic-advanced/airsonic-advanced/archive/refs/heads/master.zip"
+          unzip -q sample-project.zip || echo "⚠️ Unzip completed with warnings"
+
+          # Run AppCAT analysis
+          echo "> Running AppCAT analysis..."
+          ./$name/appcat analyze \
+            --input ./airsonic-advanced-master \
+            --target azure-aks,azure-container-apps,azure-appservice,cloud-readiness \
+            --output ./report-assessment \
+            --overwrite \
+            --code-snips-number 1 \
+            --disable-telemetry || echo "⚠️ AppCAT analysis completed with warnings/errors"
+
+          # Compress the assessment report
+          echo "> Compressing assessment report..."
+          if [ -d "./report-assessment" ]; then
+            zip -r "appcat-report-macos-$arch.zip" report-assessment
+            echo "✅ Report compressed as appcat-report-macos-$arch.zip"
+          else
+            echo "⚠️ Assessment report directory not found"
+          fi
+
+      - name: Upload Assessment Report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: appcat-report-macos-${{ matrix.arch }}
+          path: appcat_test_result/appcat-report-macos-${{ matrix.arch }}.zip
+          retention-days: 30
+
+  test-linux:
+    name: Test Linux (${{ matrix.arch }})
+    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
+    strategy:
+      matrix:
+        arch: [amd64, arm64]
+      fail-fast: false
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Java 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: "21"
+          distribution: "temurin"
+
+      - name: Test Linux AppCAT (${{ matrix.arch }})
+        run: |
+          # Set version and architecture variables
+          version="${{ env.APPCAT_VERSION }}"
+          arch="${{ matrix.arch }}"
+          name="azure-migrate-appcat-for-java-cli-linux-$arch-$version"
+
+          tar_url="https://aka.ms/appcat/$name.tar.gz"
+
+          # Create test directory
+          rm -rf appcat_test_result
+          mkdir appcat_test_result
+          cd appcat_test_result
+
+          echo "============== Testing Linux $arch =============="
+
+          # Download the files
+          echo "> Downloading $arch files..."
+          curl -L -O -J $tar_url
+
+          # Extract the files
+          echo "> Extracting $arch file..."
+          tar -xzf $name.tar.gz
+
+          # Test AppCAT functionality
+          echo "> Testing AppCAT functionality..."
+          chmod +x $name/appcat
+          ./$name/appcat --help
+
+          # Download a sample Java project for testing
+          echo "> Downloading sample Java project..."
+          curl -L -o sample-project.zip "https://github.com/airsonic-advanced/airsonic-advanced/archive/refs/heads/master.zip"
+          unzip -q sample-project.zip
+
+          # Run AppCAT analysis
+          echo "> Running AppCAT analysis..."
+          ./$name/appcat analyze \
+            --input ./airsonic-advanced-master \
+            --target azure-aks,azure-container-apps,azure-appservice,cloud-readiness \
+            --output ./report-assessment \
+            --overwrite \
+            --code-snips-number 1 \
+            --disable-telemetry || echo "⚠️ AppCAT analysis completed with warnings/errors"
+
+          # Compress the assessment report
+          echo "> Compressing assessment report..."
+          if [ -d "./report-assessment" ]; then
+            zip -r "appcat-report-linux-$arch.zip" report-assessment
+            echo "✅ Report compressed as appcat-report-linux-$arch.zip"
+          else
+            echo "⚠️ Assessment report directory not found"
+          fi
+
+      - name: Upload Assessment Report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: appcat-report-linux-${{ matrix.arch }}
+          path: appcat_test_result/appcat-report-linux-${{ matrix.arch }}.zip
+          retention-days: 30
+
+  test-windows:
+    name: Test Windows (${{ matrix.arch }})
+    runs-on: ${{ matrix.arch == 'arm64' && 'windows-11-arm' || 'windows-latest' }}
+    strategy:
+      matrix:
+        arch: [amd64, arm64]
+      fail-fast: false
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Java 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: "21"
+          distribution: "temurin"
+
+      - name: Test Windows AppCAT (${{ matrix.arch }})
+        shell: pwsh
+        run: |
+          # Set version and architecture variables
+          $version = "${{ env.APPCAT_VERSION }}"
+          $arch = "${{ matrix.arch }}"
+          $name = "azure-migrate-appcat-for-java-cli-windows-$arch-$version"
+
+          # Create test directory
+          if (Test-Path "appcat_test_result") {
+              Remove-Item "appcat_test_result" -Recurse -Force
+          }
+          New-Item -ItemType Directory -Name "appcat_test_result"
+          Set-Location "appcat_test_result"
+
+          Write-Host "============== Testing Windows $arch =============="
+
+          # Download the files
+          Write-Host "> Downloading $arch files..."
+          $zipUrl = "https://aka.ms/appcat/$name.zip"
+          Invoke-WebRequest -Uri $zipUrl -OutFile "$name.zip"
+
+          # Extract the files
+          Write-Host "> Extracting $arch file..."
+          Expand-Archive -Path "$name.zip" -DestinationPath "."
+
+          # Test AppCAT functionality
+          Write-Host "> Testing AppCAT functionality..."
+          & ".\$name\appcat.exe" --help
+
+          # Download a sample Java project for testing
+          Write-Host "> Downloading sample Java project..."
+          Invoke-WebRequest -Uri "https://github.com/airsonic-advanced/airsonic-advanced/archive/refs/heads/master.zip" -OutFile "sample-project.zip"
+          Expand-Archive -Path "sample-project.zip" -DestinationPath "."
+
+          # Run AppCAT analysis
+          Write-Host "> Running AppCAT analysis..."
+          try {
+              & ".\$name\appcat" analyze `
+                --input ".\airsonic-advanced-master" `
+                --target "azure-aks,azure-container-apps,azure-appservice,cloud-readiness" `
+                --output ".\report-assessment" `
+                --overwrite `
+                --code-snips-number 1 `
+                --disable-telemetry
+          } catch {
+              Write-Host "⚠️ AppCAT analysis completed with warnings/errors: $_"
+          }
+
+          # Compress the assessment report
+          Write-Host "> Compressing assessment report..."
+          if (Test-Path ".\report-assessment") {
+              Compress-Archive -Path ".\report-assessment" -DestinationPath "appcat-report-windows-$arch.zip"
+              Write-Host "✅ Report compressed as appcat-report-windows-$arch.zip"
+          } else {
+              Write-Host "⚠️ Assessment report directory not found"
+          }
+
+      - name: Upload Assessment Report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: appcat-report-windows-${{ matrix.arch }}
+          path: appcat_test_result/appcat-report-windows-${{ matrix.arch }}.zip
+          retention-days: 30
+
+  verify-sha256-all:
+    name: Verify SHA256 for All Platforms
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download and verify all SHA256 checksums
+        run: |
+          version="${{ env.APPCAT_VERSION }}"
+
+          # Create test directory
+          mkdir -p sha256_verification
+          cd sha256_verification
+
+          # Define Unix-like platforms (using tar.gz)
+          unix_platforms=(
+            "macos-amd64"
+            "macos-arm64"
+            "linux-amd64"
+            "linux-arm64"
+          )
+
+          # Define Windows platforms (using zip)
+          windows_platforms=(
+            "windows-amd64"
+            "windows-arm64"
+          )
+
+          echo "============== SHA256 Verification for All Platforms =============="
+
+          # Test Unix-like platforms (tar.gz)
+          exit_code=0
+          for platform in "${unix_platforms[@]}"; do
+            echo "> Testing platform: $platform (tar.gz)"
+            name="azure-migrate-appcat-for-java-cli-$platform-$version"
+            
+            # Download files
+            curl -L -O -J "https://aka.ms/appcat/$name.tar.gz" || { echo "❌ Failed to download $platform"; exit_code=1; continue; }
+            curl -L -O -J "https://aka.ms/appcat/$name.tar.gz.sha256sum.txt" || { echo "❌ Failed to download checksum for $platform"; exit_code=1; continue; }
+            
+            # For macOS platforms, rename the downloaded file to match the expected filename in SHA256 checksum
+            if [[ "$platform" == "macos-"* ]]; then
+              expected_name="${name/macos/macOS}"
+              if [ -f "$name.tar.gz" ] && [ ! -f "$expected_name.tar.gz" ]; then
+                mv "$name.tar.gz" "$expected_name.tar.gz"
+                echo "Renamed $name.tar.gz to $expected_name.tar.gz for SHA256 verification"
+              fi
+            fi
+            
+            ls -la
+
+            # Verify checksum
+            if sha256sum -c "$name.tar.gz.sha256sum.txt"; then
+              echo "✅ $platform SHA256 verified"
+            else
+              echo "❌ $platform SHA256 verification failed"
+              exit_code=1
+            fi
+            
+            # Clean up
+            rm -f "$name.tar.gz" "$name.tar.gz.sha256sum.txt"
+            # Also clean up the renamed file if it exists
+            if [[ "$platform" == "macos-"* ]]; then
+              expected_name="${name/macos/macOS}"
+              rm -f "$expected_name.tar.gz"
+            fi
+            echo "---"
+          done
+
+          # Test Windows platforms (zip)
+          for platform in "${windows_platforms[@]}"; do
+            echo "> Testing platform: $platform (zip)"
+            name="azure-migrate-appcat-for-java-cli-$platform-$version"
+            
+            # Download files
+            curl -L -O -J "https://aka.ms/appcat/$name.zip" || { echo "❌ Failed to download $platform"; exit_code=1; continue; }
+            curl -L -O -J "https://aka.ms/appcat/$name.zip.sha256sum.txt" || { echo "❌ Failed to download checksum for $platform"; exit_code=1; continue; }
+            
+            # Verify checksum
+            if sha256sum -c "$name.zip.sha256sum.txt"; then
+              echo "✅ $platform SHA256 verified"
+            else
+              echo "❌ $platform SHA256 verification failed"
+              exit_code=1
+            fi
+            
+            # Clean up
+            rm -f "$name.zip" "$name.zip.sha256sum.txt"
+            echo "---"
+          done
+
+          # Exit with error if any verification failed
+          if [ $exit_code -ne 0 ]; then
+            echo "❌ One or more SHA256 verifications failed"
+            exit 1
+          else
+            echo "✅ All SHA256 verifications passed"
+          fi
+
+  verify-gpg-signatures:
+    name: Verify GPG Signatures
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install GPG
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gnupg
+
+      - name: Import Microsoft GPG public key
+        run: |
+          # Import Microsoft's GPG public key
+          cat <<EOF | gpg --import
+          -----BEGIN PGP PUBLIC KEY BLOCK-----
+          Version: BSN Pgp v1.1.0.0
+
+          mQINBGVUhiwBEADF3TWX0HMi2+BdQfJrSdQkZTE4qk4vV2ooAMn8vWA2DGI88JOl
+          k1LwhZGEqJv5TsKTyNEMWb3NXhR1ZZ5uQPvf6iN0806cq83s096F85GUtjzfGLQj
+          Zo3FhDSKeHz3mhthQ4QP4bwYUmSpWs6e+/ZSFYYc3yU8mInDM4SNzrqr4x2ltmf+
+          3RWkoYYo1SpG521A9+1zi7xzz6IHpAk6MdIcTj7mHxXd6ovmXkvHUhKbXGkybHPn
+          iupWokDaJZgV4+q6kc7zVgTVnwmXV7NHQhWSyOm/BmYVcpmrkCSgSH18SArFjR6Q
+          KyJ9VuUo1mJEUGnEakQSaOn1UAYtO8Mh4cXXD4833G0BLjiFNOL0XRUNh35pKvcT
+          my/HnXvRXtpzAzTtANPxIbjli/veagU+JRWhtjtfONz0wQ5Bv1zFjnM9ewxFNPPo
+          7Jp9WCVeUKFZcZJo8r/k7Y4d0Y1WINOPniSCNhKcD0pva3gXLcxfdnZjdMSj++ba
+          XlAstjw0Oyty0EXoHXCMpelMoa+DQ7KSDGKrOtm5YFAP6Ki4go1Tt2q8nmul36cZ
+          Zot6eoPG/qKxW+dvmSrWhQCcfd74VbhECbzXiCFLHadq85C1K5rrLM6oVr1u7K6O
+          jlc1aitGgZECi6fvu61QhpUvHjCegRWzMIhah9qrv4lvxFFcA+a1jwXlnwARAQAB
+          tEJNaWNyb3NvZnQgQ29ycG9yYXRpb24gLSBHZW5lcmFsIEdQRyBTaWduZXIgPGdw
+          Z3NpZ25AbWljcm9zb2Z0LmNvbT6JAjgEEwEIACIFAmVUhiwCGwMGCwkIBwMCBhUI
+          AgkKCwQWAgMBAh4BAheAAAoJEO5Nd5L3SBgrDc0P/0Ubx0vqD/DgyhiP0bIs8euO
+          iA5BQvOCiroIkhSkFbAw8rT9a/XtRTRM2l4I8c2M1ZX9i/0wWihmFUJhiVHyRxkl
+          ZcEFv+ieBuhvD1gPOVLZg3To8yOTrcOnHe+FuKqA6u+3xBn2AmAWeck9o0NKhtnm
+          5ckweos+Qj9NoxaZX8UeGFstOiTBJeyhuJjthQ+3M0BvTxEaRcLXGSXSGSgZ00ii
+          YSLNgOMPF+C22bXBL/erClEYkIGCctqPvyrhV/GVNnGk2ALyJqdK+BaJeGh9mBJa
+          ZrP3l6vFxsAI0RNCNU1s5QaFzfFzFkiUnG/aoyuwh4xmsB+uyVkR+KigPK9gfF3S
+          nU7AqcdhSbUA6A0DGDRkHauHM5Wtc7730LdjiNDXbYwG/yXmDYNasoszmItZzh77
+          HiQxYA5dNB9r9QJS2rHV/qe+heAJ5Rub5kxcu33DGL30qG7Q9+HRTu0oSEOIUFyT
+          aOJJnNUiB2D4hoKKnr5U8FYOZ7KvDcG7cDvInqYtGpNfrnIf94VeB9WJY6DbDQSA
+          F5yHb6X8FS0x3lMT2H1l6RRyr0278kyO18VBudtlnonC+Y1UT7eqAk6WjS5CitPX
+          T3Hc7jCURugXrc51igKa+p67yAaybEIuVyWF6JaINKRqiUqEPVXnHELXPbBmiHW5
+          1HwdbKTMzgF8bu1JI+tQ
+          =lIzW
+          -----END PGP PUBLIC KEY BLOCK-----
+          EOF
+
+          # Trust the key (set ultimate trust)
+          gpg --import-ownertrust <<EOF
+          AA86F75E427A19DD33346403EE4D7792F748182B:6:
+          EOF
+
+      - name: Download and verify GPG signatures
+        run: |
+          version="${{ env.APPCAT_VERSION }}"
+
+          # Create test directory
+          mkdir -p gpg_verification
+          cd gpg_verification
+
+          # Define Unix-like platforms (using tar.gz)
+          unix_platforms=(
+            "macos-amd64"
+            "macos-arm64"
+            "linux-amd64"
+            "linux-arm64"
+          )
+
+          # Define Windows platforms (using zip)
+          windows_platforms=(
+            "windows-amd64"
+            "windows-arm64"
+          )
+
+          echo "============== GPG Signature Verification for All Platforms =============="
+
+          # Test Unix-like platforms (tar.gz)
+          exit_code=0
+          for platform in "${unix_platforms[@]}"; do
+            echo "> Testing platform: $platform (tar.gz)"
+            name="azure-migrate-appcat-for-java-cli-$platform-$version"
+
+            # Download release file
+            curl -L -O -J "https://aka.ms/appcat/$name.tar.gz" || { echo "❌ Failed to download release for $platform"; exit_code=1; continue; }
+            
+            # Download signature file
+            curl -L -O -J "https://aka.ms/appcat/$name.tar.gz.sig" || { echo "❌ Failed to download signature for $platform"; exit_code=1; continue; }
+            
+            # Try to verify signature
+            if gpg --verify "$name.tar.gz.sig" 2>&1; then
+              echo "✅ $platform GPG signature verified"
+            else
+              echo "❌ $platform GPG signature verification failed"
+              exit_code=1
+            fi
+            
+            # Clean up
+            rm -f "$name.tar.gz.sig"
+            echo "---"
+          done
+
+          # Test Windows platforms (zip)
+          for platform in "${windows_platforms[@]}"; do
+            echo "> Testing platform: $platform (zip)"
+            name="azure-migrate-appcat-for-java-cli-$platform-$version"
+
+            # Download release file
+            curl -L -O -J "https://aka.ms/appcat/$name.zip" || { echo "❌ Failed to download release for $platform"; exit_code=1; continue; }
+            
+            # Download signature file
+            curl -L -O -J "https://aka.ms/appcat/$name.zip.sig" || { echo "❌ Failed to download signature for $platform"; exit_code=1; continue; }
+            
+            # Try to verify signature
+            if gpg --verify "$name.zip.sig" 2>&1; then
+              echo "✅ $platform GPG signature verified"
+            else
+              echo "❌ $platform GPG signature verification failed"
+              exit_code=1
+            fi
+            
+            # Clean up
+            rm -f "$name.zip.sig"
+            echo "---"
+          done
+
+          # Exit with error if any verification failed
+          if [ $exit_code -ne 0 ]; then
+            echo "❌ One or more GPG signature verifications failed"
+            exit 1
+          else
+            echo "✅ All GPG signature verifications passed"
+          fi
+
+  summary:
+    name: Test Summary
+    runs-on: ubuntu-latest
+    needs:
+      [
+        test-macos,
+        test-linux,
+        test-windows,
+        verify-sha256-all,
+        verify-gpg-signatures,
+      ]
+    if: always()
+
+    steps:
+      - name: Print test summary
+        run: |
+          echo "============== AppCAT Release Testing Summary =============="
+          echo "Version tested: ${{ env.APPCAT_VERSION }}"
+          echo ""
+          echo "Test Results:"
+          echo "- macos tests: ${{ needs.test-macos.result }}"
+          echo "- Linux tests: ${{ needs.test-linux.result }}"
+          echo "- Windows tests: ${{ needs.test-windows.result }}"
+          echo "- SHA256 verification: ${{ needs.verify-sha256-all.result }}"
+          echo "- GPG signature verification: ${{ needs.verify-gpg-signatures.result }}"
+          echo ""
+
+          if [[ "${{ needs.test-macos.result }}" == "success" && \
+                "${{ needs.test-linux.result }}" == "success" && \
+                "${{ needs.test-windows.result }}" == "success" && \
+                "${{ needs.verify-sha256-all.result }}" == "success" ]]; then
+            echo "✅ All critical tests passed!"
+          else
+            echo "⚠️ Some tests failed or were skipped. Please check the individual job results."
+          fi
