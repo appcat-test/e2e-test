@@ -98,21 +98,12 @@ jobs:
             --code-snips-number 1 \
             --disable-telemetry || echo "⚠️ AppCAT analysis completed with warnings/errors"
 
-          # Compress the assessment report
-          echo "> Compressing assessment report..."
-          if [ -d "./report-assessment" ]; then
-            zip -r "appcat-report-macos-$arch.zip" report-assessment
-            echo "✅ Report compressed as appcat-report-macos-$arch.zip"
-          else
-            echo "⚠️ Assessment report directory not found"
-          fi
-
       - name: Upload Assessment Report
         uses: actions/upload-artifact@v4
         if: always()
         with:
           name: appcat-report-macos-${{ matrix.arch }}
-          path: appcat_test_result/appcat-report-macos-${{ matrix.arch }}.zip
+          path: appcat_test_result/report-assessment
           retention-days: 30
 
   test-linux:
@@ -177,21 +168,12 @@ jobs:
             --code-snips-number 1 \
             --disable-telemetry || echo "⚠️ AppCAT analysis completed with warnings/errors"
 
-          # Compress the assessment report
-          echo "> Compressing assessment report..."
-          if [ -d "./report-assessment" ]; then
-            zip -r "appcat-report-linux-$arch.zip" report-assessment
-            echo "✅ Report compressed as appcat-report-linux-$arch.zip"
-          else
-            echo "⚠️ Assessment report directory not found"
-          fi
-
       - name: Upload Assessment Report
         uses: actions/upload-artifact@v4
         if: always()
         with:
           name: appcat-report-linux-${{ matrix.arch }}
-          path: appcat_test_result/appcat-report-linux-${{ matrix.arch }}.zip
+          path: appcat_test_result/report-assessment
           retention-days: 30
 
   test-windows:
@@ -261,21 +243,12 @@ jobs:
               Write-Host "⚠️ AppCAT analysis completed with warnings/errors: $_"
           }
 
-          # Compress the assessment report
-          Write-Host "> Compressing assessment report..."
-          if (Test-Path ".\report-assessment") {
-              Compress-Archive -Path ".\report-assessment" -DestinationPath "appcat-report-windows-$arch.zip"
-              Write-Host "✅ Report compressed as appcat-report-windows-$arch.zip"
-          } else {
-              Write-Host "⚠️ Assessment report directory not found"
-          }
-
       - name: Upload Assessment Report
         uses: actions/upload-artifact@v4
         if: always()
         with:
           name: appcat-report-windows-${{ matrix.arch }}
-          path: appcat_test_result/appcat-report-windows-${{ matrix.arch }}.zip
+          path: appcat_test_result/report-assessment
           retention-days: 30
 
   verify-sha256-all:
